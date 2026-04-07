@@ -1,0 +1,6 @@
+Django
+djangorestframework
+PyYAML
+Pillow
+requests
+python-dotenv
