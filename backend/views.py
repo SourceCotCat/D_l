@@ -1,7 +1,12 @@
 import yaml
-from django.core.mail import send_mail
 from django.conf import settings
 from django.db import IntegrityError
+from .tasks import (
+    send_registration_email,
+    send_order_confirmation_email,
+    send_order_invoice_email,
+    send_order_status_email,
+)
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -29,13 +34,8 @@ class RegisterView(APIView):
             user = serializer.save()
             # создаём токен сразу при регистрации
             token, _ = Token.objects.get_or_create(user=user)
-            send_mail(
-                subject='Регистрация на сервисе закупок',
-                message=f'Здравствуйте, {user.first_name}! Вы успешно зарегистрировались.',
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
+            # запускаем отправку письма асинхронно через Celery
+            send_registration_email.delay(user.email, user.first_name)
             return Response({'token': token.key}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -268,32 +268,22 @@ class OrderConfirmView(APIView):
             for item in basket.ordered_items.all()
         )
 
-        # письмо покупателю с подтверждением заказа
-        send_mail(
-            subject=f'Подтверждение заказа #{basket.id}',
-            message=(
-                f'Ваш заказ #{basket.id} подтверждён.\n\n'
-                f'Товары:\n{items_text}\n\n'
-                f'Итого: {total} руб.\n\n'
-                f'Адрес доставки: {contact.city}, {contact.street}, {contact.house}'
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[request.user.email],
-            fail_silently=True,
+        # письмо покупателю — запускаем асинхронно
+        send_order_confirmation_email.delay(
+            request.user.email,
+            basket.id,
+            items_text,
+            total,
+            f'{contact.city}, {contact.street}, {contact.house}',
         )
 
-        # накладная администратору для исполнения заказа
-        send_mail(
-            subject=f'Новый заказ #{basket.id}',
-            message=(
-                f'Получен новый заказ #{basket.id} от {request.user.email}.\n\n'
-                f'Товары:\n{items_text}\n\n'
-                f'Итого: {total} руб.\n\n'
-                f'Адрес доставки: {contact.city}, {contact.street}, {contact.house}'
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[settings.ADMIN_EMAIL],
-            fail_silently=True,
+        # накладная администратору — запускаем асинхронно
+        send_order_invoice_email.delay(
+            basket.id,
+            request.user.email,
+            items_text,
+            total,
+            f'{contact.city}, {contact.street}, {contact.house}',
         )
 
         return Response({'status': 'ok', 'order_id': basket.id})
@@ -352,14 +342,8 @@ class OrderStatusView(APIView):
         order.status = new_status
         order.save()
 
-        # уведомляем покупателя об изменении статуса
-        send_mail(
-            subject=f'Статус заказа #{order.id} изменён',
-            message=f'Статус вашего заказа #{order.id} изменён на «{order.get_status_display()}».',
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[order.user.email],
-            fail_silently=True,
-        )
+        # уведомляем покупателя об изменении статуса — асинхронно
+        send_order_status_email.delay(order.user.email, order.id, order.get_status_display())
 
         serializer = OrderSerializer(order)
         return Response(serializer.data)
