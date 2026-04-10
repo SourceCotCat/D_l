@@ -93,3 +93,33 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_total_sum(self, obj):
         return sum(item.quantity * item.product_info.price for item in obj.ordered_items.all())
+
+
+class PartnerOrderItemSerializer(serializers.ModelSerializer):
+    product_info = ProductInfoSerializer(read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = ['id', 'product_info', 'quantity']
+
+
+class PartnerOrderSerializer(serializers.ModelSerializer):
+    # показываем поставщику только его позиции заказа, не чужие
+    ordered_items = serializers.SerializerMethodField()
+    contact = ContactSerializer(read_only=True)
+    # сумма только по товарам этого поставщика
+    total_sum = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields = ['id', 'dt', 'status', 'contact', 'ordered_items', 'total_sum']
+
+    def get_ordered_items(self, obj):
+        shop = self.context.get('shop')
+        items = obj.ordered_items.filter(product_info__shop=shop)
+        return PartnerOrderItemSerializer(items, many=True).data
+
+    def get_total_sum(self, obj):
+        shop = self.context.get('shop')
+        items = obj.ordered_items.filter(product_info__shop=shop)
+        return sum(item.quantity * item.product_info.price for item in items)

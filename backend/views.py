@@ -13,6 +13,7 @@ from .models import (
     Parameter, ProductParameter, Contact, Order, OrderItem
 )
 from .serializers import (
+    PartnerOrderSerializer,
     UserSerializer, RegisterSerializer, ShopSerializer, CategorySerializer,
     ProductInfoSerializer, ContactSerializer, OrderSerializer,
     OrderItemCreateSerializer
@@ -483,5 +484,6 @@ class PartnerOrdersView(APIView):
             'ordered_items__product_info__product',
             'ordered_items__product_info__product_parameters__parameter',
         ).select_related('contact', 'user').distinct()
-        serializer = OrderSerializer(orders, many=True)
+        # передаём shop в контекст — сериализатор покажет только позиции этого магазина
+        serializer = PartnerOrderSerializer(orders, many=True, context={'shop': shop})
         return Response(serializer.data)
